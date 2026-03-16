@@ -37,3 +37,5 @@ dist/
 # Sistema operativo
 .DS_Store
 Thumbs.db
+
+**/definiciones_futuras_validation_result.txt
