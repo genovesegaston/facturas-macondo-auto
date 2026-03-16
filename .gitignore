@@ -1,0 +1,39 @@
+# Entorno virtual
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Build / distribución
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+
+# Variables de entorno
+.env
+
+# Archivos temporales
+*.tmp
+*.temp
+
+# VS Code
+.vscode/
+
+# PyInstaller
+*.spec
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
