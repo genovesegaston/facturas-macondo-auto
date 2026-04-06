@@ -5,13 +5,6 @@ from typing import Optional
 
 @dataclass
 class InvoiceData:
-    """
-    Representa los datos extraídos y normalizados de una factura.
-
-    Este modelo no extrae ni valida; solo almacena la información
-    estructurada del documento una vez parseado.
-    """
-
     document_id: str = ""
     file_name: str = ""
 
@@ -28,6 +21,7 @@ class InvoiceData:
 
     receptor_nombre_detectado: str = ""
     receptor_nombre_normalizado: str = ""
+    receptor_cuit: str = ""
     receptor_valido: bool = False
 
     cae: str = ""
@@ -63,9 +57,6 @@ class InvoiceData:
     observacion_usuario: str = ""
 
     def recalculate_iva_total(self) -> float:
-        """
-        Recalcula IVA total a partir de las alícuotas individuales.
-        """
         self.iva_total = (
             self.iva_21
             + self.iva_10_5
@@ -77,17 +68,10 @@ class InvoiceData:
         return self.iva_total
 
     def build_duplicate_key(self) -> str:
-        """
-        Construye la clave de duplicado definida para el negocio:
-        punto de venta + número + CAE
-        """
         self.clave_duplicado = f"{self.punto_venta}-{self.numero_comprobante}-{self.cae}"
         return self.clave_duplicado
 
     def to_dict(self) -> dict:
-        """
-        Convierte el modelo a diccionario serializable.
-        """
         data = asdict(self)
         data["fecha_comprobante"] = (
             self.fecha_comprobante.isoformat() if self.fecha_comprobante else None
@@ -98,10 +82,6 @@ class InvoiceData:
         return data
 
     def to_row_dict(self) -> dict:
-        """
-        Devuelve un diccionario listo para mapear contra columnas tabulares
-        como Excel o Google Sheets.
-        """
         return {
             "document_id": self.document_id,
             "file_name": self.file_name,
@@ -115,6 +95,7 @@ class InvoiceData:
             "emisor_cuit": self.emisor_cuit,
             "receptor_nombre_detectado": self.receptor_nombre_detectado,
             "receptor_nombre_normalizado": self.receptor_nombre_normalizado,
+            "receptor_cuit": self.receptor_cuit,
             "receptor_valido": self.receptor_valido,
             "cae": self.cae,
             "fecha_vencimiento_cae": self.fecha_vencimiento_cae.isoformat() if self.fecha_vencimiento_cae else "",
