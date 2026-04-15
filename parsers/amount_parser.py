@@ -58,7 +58,61 @@ class ParsedAmountsBundle:
             "total": self.total,
         }
 
+def extract_subtotal_amount(text: str) -> ParsedAmountResult:
+    """
+    Extrae subtotal con prioridad fuerte sobre etiquetas ARCA confiables.
 
+    Prioridad:
+    1. Importe Neto Gravado
+    2. Subtotal
+
+    Para evitar capturar valores como 00002 o números de comprobante,
+    exige que el valor tenga formato monetario real con coma o punto decimal,
+    o bien una longitud suficientemente grande.
+    """
+    if not text:
+        return ParsedAmountResult(
+            value=0.0,
+            raw_value="",
+            success=False,
+            error_message="Texto vacío.",
+        )
+
+    preferred_patterns = [
+        r"Importe Neto Gravado",
+        r"Subtotal",
+    ]
+
+    for label in preferred_patterns:
+        pattern = rf"{label}[^\d]{{0,60}}\$?\s*([\d\.,]+)"
+        matches = re.findall(pattern, text, re.IGNORECASE)
+
+        parsed_candidates = []
+        for raw in matches:
+            raw = raw.strip()
+
+            # Descartar candidatos demasiado cortos como 00002
+            normalized = normalize_amount_string(raw)
+            if len(normalized.replace('.', '').replace('-', '')) < 4:
+                continue
+
+            # Priorizar formato monetario real
+            if "," in raw or "." in raw:
+                parsed = parse_amount(raw)
+                if parsed.success:
+                    parsed_candidates.append(parsed)
+
+        if parsed_candidates:
+            parsed_candidates.sort(key=lambda x: x.value, reverse=True)
+            return parsed_candidates[0]
+
+    return ParsedAmountResult(
+        value=0.0,
+        raw_value="",
+        success=False,
+        error_message="No se encontró subtotal confiable.",
+    )
+    
 def normalize_amount_string(raw_value: str) -> str:
     if not raw_value:
         return ""
@@ -96,13 +150,25 @@ def parse_amount(raw_value: str) -> ParsedAmountResult:
 
 
 def find_amount_by_label(text: str, label_pattern: str) -> ParsedAmountResult:
+    """
+    Busca un importe asociado a una etiqueta dada.
+
+    Reglas:
+    - prioriza importes con formato monetario real
+    - evita capturar números cortos como punto de venta o número de comprobante
+    """
     if not text:
-        return ParsedAmountResult(value=0.0, raw_value="", success=False, error_message="Texto vacío.")
+        return ParsedAmountResult(
+            value=0.0,
+            raw_value="",
+            success=False,
+            error_message="Texto vacío.",
+        )
 
-    pattern = rf"{label_pattern}[^\d]{{0,25}}\$?\s*([\d\.,]+)"
-    match = re.search(pattern, text, re.IGNORECASE)
+    pattern = rf"{label_pattern}[^\d]{{0,40}}\$?\s*([\d\.,]+)"
+    matches = re.findall(pattern, text, re.IGNORECASE)
 
-    if not match:
+    if not matches:
         return ParsedAmountResult(
             value=0.0,
             raw_value="",
@@ -110,7 +176,32 @@ def find_amount_by_label(text: str, label_pattern: str) -> ParsedAmountResult:
             error_message="No se encontró importe para la etiqueta.",
         )
 
-    return parse_amount(match.group(1))
+    # Priorizar montos con separador decimal o miles
+    prioritized = []
+    for raw in matches:
+        raw = raw.strip()
+        if "," in raw or "." in raw:
+            prioritized.append(raw)
+
+    candidates = prioritized if prioritized else matches
+
+    # Tomar el candidato numéricamente más grande para evitar capturar '00002'
+    parsed_candidates = []
+    for raw in candidates:
+        parsed = parse_amount(raw)
+        if parsed.success:
+            parsed_candidates.append(parsed)
+
+    if not parsed_candidates:
+        return ParsedAmountResult(
+            value=0.0,
+            raw_value="",
+            success=False,
+            error_message="Se encontraron candidatos pero no se pudieron parsear.",
+        )
+
+    parsed_candidates.sort(key=lambda x: x.value, reverse=True)
+    return parsed_candidates[0]
 
 
 def find_amount_by_any_label(text: str, label_patterns: list[str]) -> ParsedAmountResult:
@@ -129,7 +220,7 @@ def find_amount_by_any_label(text: str, label_patterns: list[str]) -> ParsedAmou
 def extract_invoice_amounts(text: str) -> ParsedAmountsBundle:
     amounts = ParsedAmountsBundle()
 
-    subtotal_result = find_amount_by_any_label(text, AMOUNT_LABEL_PATTERNS["subtotal"])
+    subtotal_result = extract_subtotal_amount(text)
     iva_21_result = find_amount_by_any_label(text, AMOUNT_LABEL_PATTERNS["iva_21"])
     iva_10_5_result = find_amount_by_any_label(text, AMOUNT_LABEL_PATTERNS["iva_10_5"])
     iva_27_result = find_amount_by_any_label(text, AMOUNT_LABEL_PATTERNS["iva_27"])
