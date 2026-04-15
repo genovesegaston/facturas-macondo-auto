@@ -39,3 +39,5 @@ dist/
 Thumbs.db
 
 **/definiciones_futuras_validation_result.txt
+
+service_account.json
