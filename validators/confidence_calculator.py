@@ -1,11 +1,7 @@
 from dataclasses import dataclass, field
 
+from core.constants import CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, CONFIDENCE_LOW
 from models.invoice_data import InvoiceData
-
-
-CONFIDENCE_HIGH = "Alta"
-CONFIDENCE_MEDIUM = "Media"
-CONFIDENCE_LOW = "Baja"
 
 
 @dataclass
@@ -41,7 +37,6 @@ def calculate_confidence_score(invoice: InvoiceData) -> ConfidenceResult:
         score = 0.0
         factors: list[str] = []
 
-        # Campos críticos
         critical_fields = {
             "tipo_comprobante": invoice.tipo_comprobante,
             "letra_comprobante": invoice.letra_comprobante,
@@ -64,7 +59,6 @@ def calculate_confidence_score(invoice: InvoiceData) -> ConfidenceResult:
                 score += 6
                 factors.append(f"Campo crítico detectado: {field_name}")
 
-        # Campos importantes no críticos
         optional_fields = {
             "producto_servicio": invoice.producto_servicio,
             "moneda": invoice.moneda,
@@ -75,7 +69,6 @@ def calculate_confidence_score(invoice: InvoiceData) -> ConfidenceResult:
                 score += 2
                 factors.append(f"Campo complementario detectado: {field_name}")
 
-        # Validaciones positivas
         if invoice.texto_extraido_ok:
             score += 8
             factors.append("Texto extraído correctamente")
@@ -88,7 +81,6 @@ def calculate_confidence_score(invoice: InvoiceData) -> ConfidenceResult:
             score += 10
             factors.append("Importes consistentes")
 
-        # Penalizaciones
         if invoice.campos_faltantes:
             penalty = min(len(invoice.campos_faltantes) * 5, 30)
             score -= penalty
@@ -106,10 +98,8 @@ def calculate_confidence_score(invoice: InvoiceData) -> ConfidenceResult:
             score -= 5
             factors.append("Penalización por observaciones del sistema: -5")
 
-        # Acotar score
         score = max(0.0, min(round(score, 2), 100.0))
 
-        # Mapear score a nivel
         if score >= 80:
             confidence_level = CONFIDENCE_HIGH
         elif score >= 50:

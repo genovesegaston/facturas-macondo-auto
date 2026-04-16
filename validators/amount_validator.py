@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 
+from core.config import ROUNDING_TOLERANCE
 from models.invoice_data import InvoiceData
 
 
-DEFAULT_ROUNDING_TOLERANCE = 1.0
+DEFAULT_ROUNDING_TOLERANCE = ROUNDING_TOLERANCE
 
 
 @dataclass

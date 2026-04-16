@@ -1,180 +1,282 @@
-from dataclasses import dataclass
-from typing import Iterable
+from datetime import datetime
+from pathlib import Path
+from uuid import uuid4
 
+from core.config import OCR_LANGUAGE, OCR_DPI
+from core.constants import (
+    EVENT_BATCH_FINISHED,
+    EVENT_BATCH_STARTED,
+    EVENT_DOCUMENT_CREATED,
+    EVENT_INVOICE_PARSED,
+    EVENT_INVOICE_VALIDATED,
+    EVENT_OCR_EXTRACTED,
+    EVENT_PDF_DETECTED,
+    EVENT_TEXT_CLEANED,
+    EVENT_TEXT_EXTRACTED,
+    LOG_LEVEL_ERROR,
+    LOG_LEVEL_INFO,
+    LOG_LEVEL_WARNING,
+)
+from core.enums import DocumentStatus
+from extractors.ocr_fallback import enrich_document_with_ocr_text
+from extractors.pdf_detector import enrich_document_with_pdf_detection
+from extractors.pdf_text_extractor import enrich_document_with_extracted_text
+from extractors.text_cleaner import enrich_document_with_clean_text
+from models.batch_result import BatchResult
+from models.document import Document
 from models.invoice_data import InvoiceData
+from models.processing_log import ProcessingLog
+from models.validation_result import ValidationResult
+from parsers.invoice_parser import parse_invoice_document
+from validators.invoice_validator import validate_invoice
 
 
-@dataclass
-class DuplicateValidationResult:
+def build_log(
+    level: str,
+    event_type: str,
+    message: str,
+    document: Document | None = None,
+    batch_id: str = "",
+    details: dict | None = None,
+) -> ProcessingLog:
     """
-    Resultado de validación de duplicado.
+    Crea un evento de log estructurado.
     """
-    duplicate_key: str = ""
-    duplicate_detected: bool = False
-    duplicate_reference: str = ""
-    error_message: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "duplicate_key": self.duplicate_key,
-            "duplicate_detected": self.duplicate_detected,
-            "duplicate_reference": self.duplicate_reference,
-            "error_message": self.error_message,
-        }
-
-
-def build_duplicate_key(invoice: InvoiceData) -> str:
-    """
-    Construye la clave de duplicado definida para el negocio:
-
-    punto_venta + numero_comprobante + cae
-    """
-    punto_venta = (invoice.punto_venta or "").strip()
-    numero = (invoice.numero_comprobante or "").strip()
-    cae = (invoice.cae or "").strip()
-
-    return f"{punto_venta}-{numero}-{cae}"
-
-
-def is_duplicate_key_complete(invoice: InvoiceData) -> bool:
-    """
-    Verifica si la clave de duplicado tiene todos los componentes necesarios.
-    """
-    return bool(
-        (invoice.punto_venta or "").strip()
-        and (invoice.numero_comprobante or "").strip()
-        and (invoice.cae or "").strip()
+    return ProcessingLog(
+        timestamp=datetime.now(),
+        level=level,
+        event_type=event_type,
+        file_name=document.file_name if document else "",
+        file_path=str(document.file_path) if document else "",
+        document_id=document.document_id if document else "",
+        batch_id=batch_id,
+        message=message,
+        details=details or {},
     )
 
 
-def validate_duplicate_against_keys(
-    invoice: InvoiceData,
-    existing_keys: Iterable[str],
-) -> DuplicateValidationResult:
+def build_error_invoice(
+    document: Document,
+    missing_fields: list[str],
+) -> InvoiceData:
     """
-    Valida duplicado contra una colección simple de claves existentes.
+    Construye un InvoiceData mínimo para casos de error temprano.
     """
-    try:
-        duplicate_key = build_duplicate_key(invoice)
+    return InvoiceData(
+        document_id=document.document_id,
+        file_name=document.file_name,
+        texto_extraido_ok=False,
+        observacion_sistema=document.error_message,
+        campos_faltantes=missing_fields,
+    )
 
-        if not is_duplicate_key_complete(invoice):
-            return DuplicateValidationResult(
-                duplicate_key=duplicate_key,
-                duplicate_detected=False,
-                duplicate_reference="",
-                error_message="No se puede validar duplicado: faltan componentes de la clave.",
+
+def build_error_validation(
+    document: Document,
+) -> ValidationResult:
+    """
+    Construye un ValidationResult mínimo para casos de error temprano.
+    """
+    return ValidationResult(
+        is_valid=False,
+        errors=[document.error_message] if document.error_message else ["Error desconocido."],
+        system_notes=document.error_message or "Error desconocido.",
+    )
+
+
+def process_single_document(
+    file_path: str | Path,
+    existing_keys=None,
+    existing_records=None,
+    use_ocr_fallback: bool = True,
+    tesseract_cmd: str | None = None,
+    poppler_path: str | None = None,
+) -> tuple[Document, InvoiceData, ValidationResult, list[ProcessingLog]]:
+    """
+    Procesa un único archivo PDF de punta a punta.
+    """
+    logs: list[ProcessingLog] = []
+    document = Document(file_path=Path(file_path))
+
+    logs.append(
+        build_log(
+            LOG_LEVEL_INFO,
+            EVENT_DOCUMENT_CREATED,
+            "Documento creado.",
+            document=document,
+        )
+    )
+
+    # 1. Detección PDF
+    detection_result = enrich_document_with_pdf_detection(document)
+    logs.append(
+        build_log(
+            LOG_LEVEL_INFO if not detection_result.error_message else LOG_LEVEL_ERROR,
+            EVENT_PDF_DETECTED,
+            "Detección inicial de PDF ejecutada.",
+            document=document,
+            details=detection_result.to_dict(),
+        )
+    )
+
+    if document.status == DocumentStatus.ERROR.value:
+        invoice = build_error_invoice(document, ["documento_invalido"])
+        validation = build_error_validation(document)
+        return document, invoice, validation, logs
+
+    # 2. Extracción de texto
+    if document.has_extractable_text and not document.is_scanned:
+        document = enrich_document_with_extracted_text(document)
+        logs.append(
+            build_log(
+                LOG_LEVEL_INFO if document.status != DocumentStatus.ERROR.value else LOG_LEVEL_ERROR,
+                EVENT_TEXT_EXTRACTED,
+                "Extracción directa de texto ejecutada.",
+                document=document,
             )
-
-        existing_keys_set = {str(key).strip() for key in existing_keys if str(key).strip()}
-        detected = duplicate_key in existing_keys_set
-
-        return DuplicateValidationResult(
-            duplicate_key=duplicate_key,
-            duplicate_detected=detected,
-            duplicate_reference=duplicate_key if detected else "",
-            error_message="",
         )
-
-    except Exception as exc:
-        return DuplicateValidationResult(
-            duplicate_key="",
-            duplicate_detected=False,
-            duplicate_reference="",
-            error_message=f"Error al validar duplicado: {exc}",
+    elif use_ocr_fallback:
+        document = enrich_document_with_ocr_text(
+            document=document,
+            tesseract_cmd=tesseract_cmd,
+            poppler_path=poppler_path,
+            lang=OCR_LANGUAGE,
+            dpi=OCR_DPI,
         )
-
-
-def validate_duplicate_against_records(
-    invoice: InvoiceData,
-    existing_records: Iterable[dict],
-    key_field: str = "clave_duplicado",
-    reference_field: str = "document_id",
-) -> DuplicateValidationResult:
-    """
-    Valida duplicado contra una colección de registros tipo dict.
-
-    Cada registro puede venir, por ejemplo, de:
-    - Excel
-    - Google Sheets
-    - cache local
-    - JSON
-    """
-    try:
-        duplicate_key = build_duplicate_key(invoice)
-
-        if not is_duplicate_key_complete(invoice):
-            return DuplicateValidationResult(
-                duplicate_key=duplicate_key,
-                duplicate_detected=False,
-                duplicate_reference="",
-                error_message="No se puede validar duplicado: faltan componentes de la clave.",
+        logs.append(
+            build_log(
+                LOG_LEVEL_INFO if document.status != DocumentStatus.ERROR.value else LOG_LEVEL_ERROR,
+                EVENT_OCR_EXTRACTED,
+                "Extracción OCR ejecutada.",
+                document=document,
             )
-
-        for record in existing_records:
-            record_key = str(record.get(key_field, "")).strip()
-            if record_key == duplicate_key:
-                reference = str(record.get(reference_field, "")).strip() or duplicate_key
-                return DuplicateValidationResult(
-                    duplicate_key=duplicate_key,
-                    duplicate_detected=True,
-                    duplicate_reference=reference,
-                    error_message="",
-                )
-
-        return DuplicateValidationResult(
-            duplicate_key=duplicate_key,
-            duplicate_detected=False,
-            duplicate_reference="",
-            error_message="",
-        )
-
-    except Exception as exc:
-        return DuplicateValidationResult(
-            duplicate_key="",
-            duplicate_detected=False,
-            duplicate_reference="",
-            error_message=f"Error al validar duplicado contra registros: {exc}",
-        )
-
-
-def enrich_invoice_with_duplicate_validation(
-    invoice: InvoiceData,
-    existing_keys: Iterable[str] | None = None,
-    existing_records: Iterable[dict] | None = None,
-    key_field: str = "clave_duplicado",
-    reference_field: str = "document_id",
-) -> tuple[InvoiceData, DuplicateValidationResult]:
-    """
-    Ejecuta validación de duplicado y actualiza el InvoiceData.
-
-    Prioridad:
-    1. existing_records
-    2. existing_keys
-    """
-    if existing_records is not None:
-        result = validate_duplicate_against_records(
-            invoice=invoice,
-            existing_records=existing_records,
-            key_field=key_field,
-            reference_field=reference_field,
         )
     else:
-        result = validate_duplicate_against_keys(
-            invoice=invoice,
-            existing_keys=existing_keys or [],
+        document.mark_status(
+            DocumentStatus.ERROR.value,
+            "Documento sin texto extraíble y OCR deshabilitado.",
+        )
+        logs.append(
+            build_log(
+                LOG_LEVEL_ERROR,
+                "TEXT_EXTRACTION_FAILED",
+                "No se pudo extraer texto del documento.",
+                document=document,
+            )
         )
 
-    invoice.clave_duplicado = result.duplicate_key
-    invoice.posible_duplicado = result.duplicate_detected
-    invoice.fila_duplicada_referencia = result.duplicate_reference
+    if document.status == DocumentStatus.ERROR.value:
+        invoice = build_error_invoice(document, ["texto_extraible"])
+        validation = build_error_validation(document)
+        return document, invoice, validation, logs
 
-    if result.duplicate_detected:
-        current_note = invoice.observacion_sistema.strip()
-        extra_note = f"Posible duplicado detectado: {result.duplicate_reference}"
-        invoice.observacion_sistema = (
-            f"{current_note} | {extra_note}".strip(" |")
-            if current_note
-            else extra_note
+    # 3. Limpieza de texto
+    document = enrich_document_with_clean_text(document)
+    logs.append(
+        build_log(
+            LOG_LEVEL_INFO if document.status != DocumentStatus.ERROR.value else LOG_LEVEL_ERROR,
+            EVENT_TEXT_CLEANED,
+            "Limpieza de texto ejecutada.",
+            document=document,
+        )
+    )
+
+    if document.status == DocumentStatus.ERROR.value:
+        invoice = build_error_invoice(document, ["texto_limpio"])
+        validation = build_error_validation(document)
+        return document, invoice, validation, logs
+
+    # 4. Parsing
+    invoice = parse_invoice_document(document)
+    logs.append(
+        build_log(
+            LOG_LEVEL_INFO,
+            EVENT_INVOICE_PARSED,
+            "Parsing de factura ejecutado.",
+            document=document,
+            details={"invoice_dict": invoice.to_dict()},
+        )
+    )
+
+    # 5. Validación
+    invoice, validation = validate_invoice(
+        invoice=invoice,
+        existing_keys=existing_keys,
+        existing_records=existing_records,
+    )
+    logs.append(
+        build_log(
+            LOG_LEVEL_INFO if validation.is_valid else LOG_LEVEL_WARNING,
+            EVENT_INVOICE_VALIDATED,
+            "Validación integral ejecutada.",
+            document=document,
+            details={"validation_dict": validation.to_dict()},
+        )
+    )
+
+    return document, invoice, validation, logs
+
+
+def process_batch(
+    file_paths: list[str | Path],
+    existing_keys=None,
+    existing_records=None,
+    use_ocr_fallback: bool = True,
+    tesseract_cmd: str | None = None,
+    poppler_path: str | None = None,
+) -> tuple[BatchResult, list[ProcessingLog]]:
+    """
+    Procesa un lote de archivos.
+    """
+    batch_id = str(uuid4())
+    batch = BatchResult(
+        batch_id=batch_id,
+        started_at=datetime.now(),
+    )
+
+    all_logs: list[ProcessingLog] = []
+    all_logs.append(
+        build_log(
+            LOG_LEVEL_INFO,
+            EVENT_BATCH_STARTED,
+            f"Inicio de lote con {len(file_paths)} archivo(s).",
+            batch_id=batch_id,
+        )
+    )
+
+    for file_path in file_paths:
+        document, invoice, validation, logs = process_single_document(
+            file_path=file_path,
+            existing_keys=existing_keys,
+            existing_records=existing_records,
+            use_ocr_fallback=use_ocr_fallback,
+            tesseract_cmd=tesseract_cmd,
+            poppler_path=poppler_path,
         )
 
-    return invoice, result
+        batch.add_document(document)
+        batch.add_invoice(invoice)
+        batch.add_validation_result(validation)
+        batch.increment_processed()
+
+        if validation.is_valid:
+            batch.increment_successful()
+        else:
+            batch.add_error(validation.system_notes or "Documento con validación no satisfactoria.")
+
+        all_logs.extend(logs)
+
+    batch.finish()
+    batch.recalculate_metrics()
+
+    all_logs.append(
+        build_log(
+            LOG_LEVEL_INFO,
+            EVENT_BATCH_FINISHED,
+            "Lote finalizado.",
+            batch_id=batch_id,
+            details=batch.to_summary_dict(),
+        )
+    )
+
+    return batch, all_logs

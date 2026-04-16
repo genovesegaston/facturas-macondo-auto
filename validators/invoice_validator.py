@@ -1,14 +1,14 @@
 from collections.abc import Iterable
 
+from core.config import (
+    EXPECTED_RECEIVER_CUIT,
+    EXPECTED_RECEIVER_NAME,
+    ROUNDING_TOLERANCE,
+)
 from models.invoice_data import InvoiceData
 from models.validation_result import ValidationResult
 from validators.amount_validator import enrich_invoice_with_amount_validation
-from validators.business_rules import (
-    DEFAULT_ROUNDING_TOLERANCE,
-    EXPECTED_RECEIVER_CUIT,
-    EXPECTED_RECEIVER_NAME,
-    evaluate_business_rules,
-)
+from validators.business_rules import evaluate_business_rules
 from validators.confidence_calculator import enrich_invoice_with_confidence
 from validators.duplicate_validator import enrich_invoice_with_duplicate_validation
 from validators.receiver_validator import enrich_invoice_with_receiver_validation
@@ -52,9 +52,6 @@ def build_validation_result(
         )
 
     for reason in business_eval.reasons:
-        # Reglas prácticas:
-        # - faltantes bloqueantes, receptor inválido o importes inválidos => error
-        # - duplicado o confianza baja/media => warning/revisión
         reason_lower = reason.lower()
 
         if (
@@ -84,7 +81,7 @@ def validate_invoice(
     invoice: InvoiceData,
     existing_keys: Iterable[str] | None = None,
     existing_records: Iterable[dict] | None = None,
-    rounding_tolerance: float = DEFAULT_ROUNDING_TOLERANCE,
+    rounding_tolerance: float = ROUNDING_TOLERANCE,
     expected_receiver_name: str = EXPECTED_RECEIVER_NAME,
     expected_receiver_cuit: str = EXPECTED_RECEIVER_CUIT,
 ) -> tuple[InvoiceData, ValidationResult]:
@@ -119,7 +116,7 @@ def validate_invoice(
         existing_records=existing_records,
     )
 
-    # 4. Confianza (usa estado actual del invoice)
+    # 4. Confianza
     invoice, confidence_result = enrich_invoice_with_confidence(invoice)
 
     # 5. Reglas de negocio

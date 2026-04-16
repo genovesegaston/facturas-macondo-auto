@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 
+from core.config import EXPECTED_RECEIVER_CUIT, EXPECTED_RECEIVER_NAME
 from models.invoice_data import InvoiceData
-from parsers.receiver_parser import EXPECTED_RECEIVER_NORMALIZED, normalize_receiver_text
+from parsers.receiver_parser import normalize_receiver_text
 
 
-DEFAULT_EXPECTED_RECEIVER_CUIT = "30708762233"
+DEFAULT_EXPECTED_RECEIVER_NAME = EXPECTED_RECEIVER_NAME
+DEFAULT_EXPECTED_RECEIVER_CUIT = EXPECTED_RECEIVER_CUIT
 
 
 @dataclass
@@ -14,7 +16,7 @@ class ReceiverValidationResult:
     """
     detected_name: str = ""
     normalized_name: str = ""
-    expected_name: str = EXPECTED_RECEIVER_NORMALIZED
+    expected_name: str = DEFAULT_EXPECTED_RECEIVER_NAME
 
     detected_cuit: str = ""
     expected_cuit: str = DEFAULT_EXPECTED_RECEIVER_CUIT
@@ -41,7 +43,7 @@ class ReceiverValidationResult:
 
 def validate_receiver_name(
     invoice: InvoiceData,
-    expected_name: str = EXPECTED_RECEIVER_NORMALIZED,
+    expected_name: str = DEFAULT_EXPECTED_RECEIVER_NAME,
 ) -> bool:
     """
     Valida nombre del receptor normalizado.
@@ -52,7 +54,6 @@ def validate_receiver_name(
     if not detected:
         return False
 
-    # Flexibilidad para variantes de Macondo
     if "MACONDO" in detected and "SRL" in detected:
         return True
 
@@ -77,7 +78,7 @@ def validate_receiver_cuit(
 
 def validate_receiver(
     invoice: InvoiceData,
-    expected_name: str = EXPECTED_RECEIVER_NORMALIZED,
+    expected_name: str = DEFAULT_EXPECTED_RECEIVER_NAME,
     expected_cuit: str = DEFAULT_EXPECTED_RECEIVER_CUIT,
 ) -> ReceiverValidationResult:
     """
@@ -85,7 +86,7 @@ def validate_receiver(
 
     Regla actual:
     - el nombre debe ser válido
-    - si hay CUIT esperado, también debe coincidir
+    - el CUIT debe coincidir
     """
     try:
         normalized_name = invoice.receptor_nombre_normalizado or normalize_receiver_text(invoice.receptor_nombre_detectado)
@@ -93,7 +94,6 @@ def validate_receiver(
         name_valid = validate_receiver_name(invoice, expected_name=expected_name)
         cuit_valid = validate_receiver_cuit(invoice, expected_cuit=expected_cuit)
 
-        # En este proyecto, el receptor correcto idealmente valida por nombre y CUIT
         is_valid = name_valid and cuit_valid
 
         error_parts = []
@@ -130,7 +130,7 @@ def validate_receiver(
 
 def enrich_invoice_with_receiver_validation(
     invoice: InvoiceData,
-    expected_name: str = EXPECTED_RECEIVER_NORMALIZED,
+    expected_name: str = DEFAULT_EXPECTED_RECEIVER_NAME,
     expected_cuit: str = DEFAULT_EXPECTED_RECEIVER_CUIT,
 ) -> tuple[InvoiceData, ReceiverValidationResult]:
     """

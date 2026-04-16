@@ -1,49 +1,19 @@
 from dataclasses import dataclass, field
 
+from core.config import (
+    EXPECTED_RECEIVER_CUIT,
+    EXPECTED_RECEIVER_NAME,
+    ROUNDING_TOLERANCE,
+)
+from core.constants import (
+    CRITICAL_FIELDS,
+    REVIEW_BLOCKING_FIELDS,
+    SECONDARY_FIELDS,
+)
 from models.invoice_data import InvoiceData
 
 
-# =========================
-# Parámetros de negocio MVP
-# =========================
-
-DEFAULT_ROUNDING_TOLERANCE = 1.0
-
-EXPECTED_RECEIVER_NAME = "MACONDO SRL"
-EXPECTED_RECEIVER_CUIT = "30708762233"
-
-CRITICAL_FIELDS = [
-    "tipo_comprobante",
-    "letra_comprobante",
-    "punto_venta",
-    "numero_comprobante",
-    "fecha_comprobante",
-    "emisor_nombre",
-    "emisor_cuit",
-    "receptor_nombre_detectado",
-    "receptor_cuit",
-    "cae",
-    "fecha_vencimiento_cae",
-    "subtotal",
-    "iva_total",
-    "total",
-]
-
-SECONDARY_FIELDS = [
-    "producto_servicio",
-    "moneda",
-]
-
-REVIEW_BLOCKING_FIELDS = [
-    "tipo_comprobante",
-    "punto_venta",
-    "numero_comprobante",
-    "fecha_comprobante",
-    "emisor_cuit",
-    "receptor_cuit",
-    "cae",
-    "total",
-]
+DEFAULT_ROUNDING_TOLERANCE = ROUNDING_TOLERANCE
 
 
 @dataclass
@@ -83,11 +53,12 @@ def get_missing_critical_fields(invoice: InvoiceData) -> list[str]:
     Devuelve campos críticos faltantes.
     """
     missing = []
+
     for field_name in CRITICAL_FIELDS:
         value = getattr(invoice, field_name, None)
 
-        # Para importes, 0 puede ser válido en algunos casos,
-        # pero subtotal/iva_total/total no deberían faltar como dato.
+        # Para importes, 0 puede ser válido en algunos casos.
+        # Solo consideramos faltante si es None.
         if field_name in {"subtotal", "iva_total", "total"}:
             if value is None:
                 missing.append(field_name)
@@ -104,10 +75,12 @@ def get_missing_secondary_fields(invoice: InvoiceData) -> list[str]:
     Devuelve campos secundarios faltantes.
     """
     missing = []
+
     for field_name in SECONDARY_FIELDS:
         value = getattr(invoice, field_name, None)
         if _is_missing(value):
             missing.append(field_name)
+
     return missing
 
 
@@ -119,6 +92,7 @@ def has_blocking_missing_fields(invoice: InvoiceData) -> bool:
         value = getattr(invoice, field_name, None)
         if _is_missing(value):
             return True
+
     return False
 
 
@@ -198,7 +172,6 @@ def evaluate_business_rules(invoice: InvoiceData) -> BusinessRulesEvaluation:
     reasons = []
     reasons.extend(review_reasons)
 
-    # Evitar duplicados de texto entre review y auto_approval
     for reason in auto_reasons:
         if reason not in reasons:
             reasons.append(reason)
